@@ -89,7 +89,7 @@ OCR TEXT:
 Extract EXACTLY these fields (return as JSON):
 1. product_name: The product name (e.g., "Ceramide Mochi Toner", "Vitamin C Serum")
 2. brand: The brand/manufacturer name (e.g., "TONYMOLY", "DOVE", "Neutrogena")
-3. expiry_date: The expiration/best-before date (format: MM/DD/YYYY or text, or null if not found)
+3. expiry_date: The expiration/best-before date (CRITICAL - look for keywords like "EXP", "EXPIRY", "BEST BEFORE", "USE BY") (format: MM/DD/YYYY or text, or null if not found)
 4. mfg_date: The manufacturing date (format: MM/DD/YYYY or text, or null if not found)
 5. ingredients: List of ingredients (split by commas or newlines, remove bullet points/dashes)
 6. warnings: List of warnings or cautions (e.g., "Avoid eyes", "External use only")
@@ -100,6 +100,7 @@ RULES:
 - Product name should be descriptive, not just the brand
 - For ingredients, return an array of individual items, not the whole list as one string
 - For warnings, return complete sentences or phrases
+- CRITICAL: Look very carefully for EXPIRY DATE - it's usually near the bottom of the back label, formatted as MM/DD/YYYY or month/year
 
 Return ONLY a valid JSON object, no other text:
 {{
@@ -382,7 +383,7 @@ def extract_from_pipeline(
     full_text: Optional[str] = None
 ) -> Dict[str, Any]:
     """
-    STEP 10: Main extraction orchestrator using Gemini AI.
+    STEP 10: Main extraction orchestrator using Gemini AI + regex fallbacks.
     
     Input: cleaned front_text, back_text
     Output: structured schema matching requirements
@@ -406,6 +407,21 @@ def extract_from_pipeline(
         # Use Gemini for intelligent extraction
         print(f"🤖 Using Gemini to extract product details...")
         gemini_result = extract_with_gemini(combined_text)
+        
+        # Fallback: Use regex to extract dates if Gemini didn't find them
+        if not gemini_result.get("expiry_date"):
+            print("📅 Gemini didn't find expiry date, trying regex fallback...")
+            regex_dates = extract_dates(back_text)
+            if regex_dates.get("expiry_date"):
+                gemini_result["expiry_date"] = regex_dates["expiry_date"]
+                print(f"✅ Found expiry date via regex: {gemini_result['expiry_date']}")
+        
+        if not gemini_result.get("mfg_date"):
+            print("📅 Gemini didn't find mfg date, trying regex fallback...")
+            regex_dates = extract_dates(back_text)
+            if regex_dates.get("mfg_date"):
+                gemini_result["mfg_date"] = regex_dates["mfg_date"]
+                print(f"✅ Found mfg date via regex: {gemini_result['mfg_date']}")
         
         # Compile results
         extracted = {

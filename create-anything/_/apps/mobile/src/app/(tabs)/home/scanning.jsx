@@ -1,12 +1,12 @@
-import { View, Text, StatusBar, Pressable } from "react-native";
+import { View, Text, StatusBar, Pressable, Image as RNImage } from "react-native";
 import { useRouter } from "expo-router";
 import { useColorScheme } from "react-native";
 import { useEffect, useRef, useState } from "react";
-import { CheckCircle, AlertCircle } from "lucide-react-native";
+import { CheckCircle, AlertCircle, RotateCcw } from "lucide-react-native";
 import { useFonts } from "expo-font";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { speak } from "@/utils/tts";
-import { scanImage, testConnection } from "@/utils/api";
+import { scanImages, testConnection } from "@/utils/api";
 import { useScanStore } from "@/utils/scanStore";
 import {
   Inter_600SemiBold,
@@ -27,6 +27,11 @@ export default function ScanningScreen() {
   const [cameraReady, setCameraReady] = useState(false);
   const [debugMsg, setDebugMsg] = useState("Camera loading...");
 
+  // Multi-side capture state
+  const [frontImageUri, setFrontImageUri] = useState(null);
+  const [backImageUri, setBackImageUri] = useState(null);
+  const [currentSide, setCurrentSide] = useState("front"); // "front" or "back"
+
   const [fontsLoaded] = useFonts({
     Inter_600SemiBold,
     Inter_500Medium,
@@ -41,14 +46,14 @@ export default function ScanningScreen() {
     try {
       setCapturing(true);
       setDebugMsg("📸 Capturing...");
-      console.log("📸 Auto-capturing photo...");
+      console.log(`📸 Capturing ${currentSide} side...`);
 
       const photo = await cameraRef.current.takePictureAsync({
         quality: 0.8,
         base64: false,
       });
 
-      console.log("✅ Photo captured:", photo.uri);
+      console.log(`✅ ${currentSide.toUpperCase()} photo captured:`, photo.uri);
       setDebugMsg("Processing...");
       await processImage(photo.uri);
     } catch (error) {
@@ -60,25 +65,49 @@ export default function ScanningScreen() {
   };
 
   const manualCapture = async () => {
-    console.log("📸 Manual capture triggered");
+    console.log(`📸 Manual capture triggered for ${currentSide}`);
+    // Clear any auto-capture timeout
+    if (captureTimeoutRef.current) {
+      clearTimeout(captureTimeoutRef.current);
+      captureTimeoutRef.current = null;
+    }
     autoCapturePhoto();
   };
 
   const processImage = async (imageUri) => {
     try {
-      console.log("🚀 Processing image...");
-
-      try {
-        console.log("📤 Sending to backend...");
-        const scanResult = await scanImage(imageUri);
-        console.log("✅ Backend response:", scanResult);
-        setCurrentScan(scanResult);
+      if (currentSide === "front") {
+        // First side (front) captured - move to back
+        console.log("✅ Front side captured, waiting for back side");
+        setFrontImageUri(imageUri);
+        setCurrentSide("back");
+        setDebugMsg("✅ Front captured! Now FLIP and point at BACK side\n(This is where expiry date usually is)");
         setCapturing(false);
-        router.replace("/(tabs)/home/result");
-      } catch (apiError) {
-        console.error("❌ Backend failed:", apiError);
-        alert("Backend error: " + apiError.message);
-        setCapturing(false);
+        
+        if (settings.voiceEnabled) {
+          speak("Front side captured, now flip the label and scan the back side");
+        }
+        
+        // DO NOT auto-capture back - wait for user to tap
+        
+      } else if (currentSide === "back") {
+        // Both sides captured - send to backend
+        console.log("✅ Back side captured, sending both to backend");
+        setBackImageUri(imageUri);
+        setDebugMsg("Uploading both sides to backend...");
+        
+        try {
+          console.log("📤 Sending front + back to backend...");
+          const scanResult = await scanImages(frontImageUri, imageUri);
+          console.log("✅ Backend response:", scanResult);
+          setCurrentScan(scanResult);
+          setCapturing(false);
+          router.replace("/(tabs)/home/result");
+        } catch (apiError) {
+          console.error("❌ Backend failed:", apiError);
+          alert("Backend error: " + apiError.message);
+          setCapturing(false);
+        }
       }
     } catch (e) {
       console.error("❌ Process error:", e);
@@ -87,11 +116,21 @@ export default function ScanningScreen() {
     }
   };
 
+  const resetCapture = () => {
+    console.log("🔄 Resetting capture");
+    setFrontImageUri(null);
+    setBackImageUri(null);
+    setCurrentSide("front");
+    setCameraReady(false);
+    setDebugMsg("Camera loading...");
+    setCapturing(false);
+  };
+
   useEffect(() => {
     console.log("🎬 ScanningScreen mounted");
     
     if (settings.voiceEnabled) {
-      speak("Point camera at label to auto-scan");
+      speak("Point camera at front side of label to auto-scan");
     }
 
     if (permission?.status !== "granted") {
@@ -150,12 +189,14 @@ export default function ScanningScreen() {
         onCameraReady={() => {
           console.log("📷 Camera onCameraReady fired!");
           setCameraReady(true);
-          setDebugMsg("Camera ready - auto-capturing in 2s...");
-          console.log("📷 Camera ready - auto-capture will start in 2s");
-          captureTimeoutRef.current = setTimeout(() => {
-            console.log("⏱️ 2 seconds elapsed, calling autoCapturePhoto");
-            autoCapturePhoto();
-          }, 2000);
+          
+          // Only auto-capture for FRONT side on first load
+          if (currentSide === "front" && !frontImageUri) {
+            setDebugMsg("Camera ready - tap to capture FRONT side");
+            console.log("📷 Camera ready - waiting for manual front capture");
+          } else {
+            setDebugMsg(`Camera ready - tap to capture ${currentSide.toUpperCase()} side`);
+          }
         }}
       >
         <View
@@ -166,6 +207,51 @@ export default function ScanningScreen() {
             backgroundColor: "rgba(0, 0, 0, 0.3)",
           }}
         >
+          {/* Show captured images as thumbnails */}
+          <View
+            style={{
+              flexDirection: "row",
+              gap: 12,
+              marginBottom: 30,
+              paddingHorizontal: 20,
+            }}
+          >
+            {frontImageUri && (
+              <View
+                style={{
+                  width: 60,
+                  height: 60,
+                  borderRadius: 8,
+                  borderWidth: 2,
+                  borderColor: "#10B981",
+                  overflow: "hidden",
+                }}
+              >
+                <RNImage
+                  source={{ uri: frontImageUri }}
+                  style={{ width: "100%", height: "100%" }}
+                />
+              </View>
+            )}
+            {backImageUri && (
+              <View
+                style={{
+                  width: 60,
+                  height: 60,
+                  borderRadius: 8,
+                  borderWidth: 2,
+                  borderColor: "#10B981",
+                  overflow: "hidden",
+                }}
+              >
+                <RNImage
+                  source={{ uri: backImageUri }}
+                  style={{ width: "100%", height: "100%" }}
+                />
+              </View>
+            )}
+          </View>
+
           <View
             style={{
               width: "80%",
@@ -184,8 +270,33 @@ export default function ScanningScreen() {
                 fontFamily: "Inter_500Medium",
               }}
             >
-              {capturing ? "📸 Scanning..." : "📸 Point at label"}
+              Point at {currentSide.toUpperCase()}
             </Text>
+            {!capturing && (
+              <>
+                <Text
+                  style={{
+                    color: "#9CA3AF",
+                    fontSize: 12,
+                    marginTop: 12,
+                    textAlign: "center",
+                  }}
+                >
+                  Position label to fill this frame
+                </Text>
+                <Text
+                  style={{
+                    color: "#9CA3AF",
+                    fontSize: 11,
+                    marginTop: 8,
+                    textAlign: "center",
+                    maxWidth: "90%",
+                  }}
+                >
+                  • Keep straight and centered{"\n"}• Good lighting required{"\n"}• Focus on text clarity
+                </Text>
+              </>
+            )}
           </View>
 
           {/* Manual capture button as backup */}
@@ -204,6 +315,29 @@ export default function ScanningScreen() {
               {capturing ? "Processing..." : "Tap to Capture"}
             </Text>
           </Pressable>
+
+          {/* Reset button if front is captured */}
+          {frontImageUri && (
+            <Pressable
+              onPress={resetCapture}
+              disabled={capturing}
+              style={{
+                marginTop: 12,
+                backgroundColor: "#6B7280",
+                paddingHorizontal: 20,
+                paddingVertical: 8,
+                borderRadius: 8,
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 6,
+              }}
+            >
+              <RotateCcw size={16} color="#FFF" />
+              <Text style={{ color: "#FFF", fontWeight: "bold", fontSize: 14 }}>
+                Reset
+              </Text>
+            </Pressable>
+          )}
         </View>
       </CameraView>
 

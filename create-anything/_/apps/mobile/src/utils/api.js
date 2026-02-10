@@ -1,4 +1,4 @@
-const API_BASE = process.env.EXPO_PUBLIC_API_BASE || 'http://192.168.1.5:8000';
+const API_BASE = process.env.EXPO_PUBLIC_API_BASE || 'http://192.168.0.16:8000';
 
 // Test connectivity
 export const testConnection = async () => {
@@ -16,12 +16,12 @@ export const testConnection = async () => {
   }
 };
 
+// Single image upload (legacy/fallback)
 export const scanImage = async (imageUri) => {
   return new Promise((resolve, reject) => {
     try {
       console.log('🎯 Starting image upload...', imageUri);
       
-      // Use XMLHttpRequest which works better in React Native
       const xhr = new XMLHttpRequest();
       
       xhr.upload.onprogress = (e) => {
@@ -54,7 +54,6 @@ export const scanImage = async (imageUri) => {
       xhr.open('POST', uploadUrl, true);
       xhr.timeout = 30000;
       
-      // Create FormData with file URI
       const formData = new FormData();
       formData.append('file', {
         uri: imageUri,
@@ -66,6 +65,65 @@ export const scanImage = async (imageUri) => {
       
     } catch (error) {
       console.error('❌ scanImage error:', error);
+      reject(error);
+    }
+  });
+};
+
+// Multi-image upload (front + back)
+export const scanImages = async (frontImageUri, backImageUri) => {
+  return new Promise((resolve, reject) => {
+    try {
+      console.log('🎯 Starting dual-image upload...', { front: frontImageUri, back: backImageUri });
+      
+      const xhr = new XMLHttpRequest();
+      
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          const percent = (e.loaded / e.total) * 100;
+          console.log(`📤 Upload progress: ${percent.toFixed(0)}%`);
+        }
+      };
+      
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const result = JSON.parse(xhr.responseText);
+            console.log('✅ Scan result:', result);
+            resolve(result);
+          } catch (e) {
+            reject(new Error('Failed to parse response'));
+          }
+        } else {
+          reject(new Error(`API Error (${xhr.status}): ${xhr.responseText}`));
+        }
+      };
+      
+      xhr.onerror = () => reject(new Error('Network request failed'));
+      xhr.ontimeout = () => reject(new Error('Request timeout'));
+      
+      const uploadUrl = `${API_BASE}/scan`;
+      console.log('📤 Uploading to:', uploadUrl);
+      
+      xhr.open('POST', uploadUrl, true);
+      xhr.timeout = 60000;
+      
+      const formData = new FormData();
+      formData.append('front', {
+        uri: frontImageUri,
+        type: 'image/jpeg',
+        name: 'label_front.jpg',
+      });
+      formData.append('back', {
+        uri: backImageUri,
+        type: 'image/jpeg',
+        name: 'label_back.jpg',
+      });
+      
+      xhr.send(formData);
+      
+    } catch (error) {
+      console.error('❌ scanImages error:', error);
       reject(error);
     }
   });
