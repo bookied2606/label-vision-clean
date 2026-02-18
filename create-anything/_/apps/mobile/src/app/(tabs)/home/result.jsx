@@ -1,4 +1,4 @@
-import { View, Text, useColorScheme, ScrollView } from "react-native";
+import { View, Text, useColorScheme, ScrollView, Image } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import { useRouter } from "expo-router";
@@ -13,6 +13,7 @@ import HapticButton from "@/components/HapticButton";
 import { speak } from "@/utils/tts";
 import { successHaptic } from "@/utils/haptics";
 import { useScanStore } from "@/utils/scanStore";
+import { API_BASE } from "@/utils/api";
 import {
   useFonts,
   Inter_600SemiBold,
@@ -120,6 +121,23 @@ export default function ResultScreen() {
           >
             {isFailed ? "⚠️ Scan Issue" : "✅ Scan Results"}
           </Text>
+
+          {/* Scanned Image Display */}
+          {currentScan.image && (
+            <View style={{ marginBottom: 24, borderRadius: 12, overflow: "hidden" }}>
+              <Image
+                source={{ 
+                  uri: `${currentScan.image.startsWith('http') ? '' : API_BASE}${currentScan.image}` 
+                }}
+                style={{
+                  width: "100%",
+                  height: 200,
+                  resizeMode: "cover",
+                  backgroundColor: isDark ? "#374151" : "#E5E7EB",
+                }}
+              />
+            </View>
+          )}
 
           {/* Failure Message */}
           {isFailed ? (

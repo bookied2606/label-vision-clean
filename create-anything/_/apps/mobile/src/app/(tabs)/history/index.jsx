@@ -1,11 +1,11 @@
-import { View, Text, useColorScheme, ScrollView } from "react-native";
+import { View, Text, useColorScheme, ScrollView, Image } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import { useRouter } from "expo-router";
 import { Clock, Package } from "lucide-react-native";
 import HapticButton from "@/components/HapticButton";
 import { useScanStore } from "@/utils/scanStore";
-import { getHistory } from "@/utils/api";
+import { getHistory, API_BASE } from "@/utils/api";
 import {
   useFonts,
   Inter_600SemiBold,
@@ -76,6 +76,7 @@ export default function HistoryScreen() {
       summary: scan.summary,
       confidence: scan.confidence,
       scannedAt: scan.scannedAt,
+      image: scan.image || (scan.imagePaths && scan.imagePaths[0]) || null,
     };
     setCurrentScan(normalized);
     router.push("/(tabs)/home/result");
@@ -182,18 +183,27 @@ export default function HistoryScreen() {
                   alignItems: "center",
                 }}
               >
-                <View
-                  style={{
-                    width: 48,
-                    height: 48,
-                    borderRadius: 24,
-                    backgroundColor: isDark ? "#333333" : "#E5E7EB",
-                    justifyContent: "center",
-                    alignItems: "center",
-                    marginRight: 16,
-                  }}
-                >
-                  <Package size={24} color="#3B82F6" />
+                <View style={{ marginRight: 16 }}>
+                  {scan.image ? (
+                    <Image
+                      source={{ uri: `${scan.image.startsWith('http') ? '' : API_BASE}${scan.image}` }}
+                      style={{ width: 56, height: 56, borderRadius: 8, backgroundColor: isDark ? '#333' : '#E5E7EB' }}
+                      resizeMode="cover"
+                    />
+                  ) : (
+                    <View
+                      style={{
+                        width: 48,
+                        height: 48,
+                        borderRadius: 24,
+                        backgroundColor: isDark ? "#333333" : "#E5E7EB",
+                        justifyContent: "center",
+                        alignItems: "center",
+                      }}
+                    >
+                      <Package size={24} color="#3B82F6" />
+                    </View>
+                  )}
                 </View>
 
                 <View style={{ flex: 1 }}>

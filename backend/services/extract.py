@@ -3,7 +3,14 @@ import json
 import os
 from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
-import google.generativeai as genai
+from datetime import datetime
+
+# Import google generative AI library lazily — if it's not installed, continue with
+# non-AI fallbacks. This avoids hard dependency during local runs.
+try:
+    import google.generativeai as genai
+except Exception:
+    genai = None
 
 # Load environment variables from .env file (explicit path)
 env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
@@ -11,18 +18,22 @@ load_dotenv(dotenv_path=env_path)
 
 # Initialize Gemini with API key from .env
 api_key = os.getenv("GOOGLE_API_KEY")
-model = None
 
-if api_key:
+# Try to initialize Gemini model only if the library is available and API key provided
+model = None
+if genai is not None and api_key:
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.5-flash")  # Use gemini-2.5-flash (newer, better)
-        print(f"✅ Gemini (gemini-2.5-flash) initialized successfully")
+        model = genai.GenerativeModel("gemini-2.5-flash")
+        print("✅ Gemini (gemini-2.5-flash) initialized successfully")
     except Exception as e:
         print(f"⚠️ Gemini initialization failed: {e}")
         model = None
 else:
-    print(f"⚠️ GOOGLE_API_KEY not found in .env file")
+    if genai is None:
+        print("⚠️ google-generativeai package not installed — skipping Gemini initialization")
+    else:
+        print("⚠️ GOOGLE_API_KEY not found in .env file")
 
 # STEP 6: BRAND & PRODUCT EXTRACTION
 KNOWN_BRANDS = [
@@ -432,10 +443,36 @@ def extract_from_pipeline(
             "ingredients": gemini_result.get("ingredients", []),
             "warnings": gemini_result.get("warnings", [])
         }
+
+        # Heuristic fallbacks when Gemini not available or missed fields
+        if not extracted.get("product_name"):
+            heur_product = extract_product_name(front_text) or extract_product_name(combined_text)
+            if heur_product:
+                extracted["product_name"] = heur_product
+        if not extracted.get("brand"):
+            heur_brand = extract_brand(front_text) or extract_brand(combined_text)
+            if heur_brand:
+                extracted["brand"] = heur_brand
+
+        if not extracted.get("ingredients"):
+            extracted["ingredients"] = extract_ingredients(back_text) or []
+        if not extracted.get("warnings"):
+            extracted["warnings"] = extract_warnings(back_text) or []
         
         # Compute confidence based on what was extracted
         confidence = compute_confidence(front_text, back_text, extracted)
-        
+
+        # Build a short human-readable summary and scannedAt timestamp
+        summary_parts = []
+        if extracted.get("product_name"):
+            summary_parts.append(extracted.get("product_name"))
+        elif extracted.get("brand"):
+            summary_parts.append(extracted.get("brand"))
+        if extracted.get("expiry_date"):
+            summary_parts.append(f"Expires {extracted.get('expiry_date')}")
+        summary = ". ".join(summary_parts) if summary_parts else None
+        scanned_at = datetime.utcnow().isoformat() + "Z"
+
         # Format for output
         return {
             "product_name": extracted.get("product_name"),
@@ -444,7 +481,9 @@ def extract_from_pipeline(
             "mfg_date": extracted.get("mfg_date"),
             "ingredients": extracted.get("ingredients", []),
             "warnings": extracted.get("warnings", []),
-            "confidence": confidence
+            "confidence": confidence,
+            "summary": summary,
+            "scannedAt": scanned_at,
         }
         
     except Exception as e:

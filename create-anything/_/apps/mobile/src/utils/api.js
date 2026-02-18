@@ -1,4 +1,4 @@
-const API_BASE = process.env.EXPO_PUBLIC_API_BASE || 'http://192.168.0.16:8000';
+export const API_BASE = process.env.EXPO_PUBLIC_API_BASE || 'http://192.168.0.16:8000';
 
 // Test connectivity
 export const testConnection = async () => {

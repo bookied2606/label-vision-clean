@@ -7,6 +7,7 @@ from typing import List, Optional
 from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, Query, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from dotenv import load_dotenv
 import httpx
@@ -42,6 +43,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Serve uploaded images at /uploads/* so clients can fetch history images
+os.makedirs("uploads", exist_ok=True)
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+
 # Create tables
 Base.metadata.create_all(bind=engine)
 
@@ -60,7 +65,8 @@ def save_image(file_bytes: bytes, scan_id: str, side: str) -> str:
     filepath = os.path.join("uploads", filename)
     with open(filepath, "wb") as f:
         f.write(file_bytes)
-    return filepath
+    # Return the public URL path for the uploaded image so clients can fetch it
+    return f"/uploads/{filename}"
 
 # Helper: merge OCR results from front and back
 def merge_ocr_results(front_text: str, back_text: str, front_extraction: dict, back_extraction: dict) -> dict:
@@ -175,6 +181,9 @@ async def scan(
         db.commit()
         db.refresh(db_scan)
         
+        # Add image field to result for frontend display
+        result["image"] = front_path
+        
         logger.info(f"✅ Scan complete: {scan_id} ({result['sides']} sides)")
         return result
         
@@ -197,15 +206,56 @@ def history(
         .limit(limit)
         .all()
     )
-    return [
-        {
+    def _public_url(p: str) -> str:
+        if not p:
+            return None
+        if p.startswith("/uploads/"):
+            return p
+        p = p.replace('\\', '/')
+        return f"/uploads/{os.path.basename(p)}"
+
+    result = []
+    for s in scans:
+        img = None
+        try:
+            paths = json.loads(s.image_paths) if s.image_paths else []
+            if paths:
+                img = _public_url(paths[0])
+        except Exception:
+            img = None
+        # summary/scannedAt fallback for older records
+        summary = None
+        scanned_at = None
+        try:
+            extracted = s.extracted_json or {}
+            summary = extracted.get("summary")
+            scanned_at = extracted.get("scannedAt")
+            if not summary:
+                pn = extracted.get("product_name")
+                br = extracted.get("brand")
+                exp = extracted.get("expiry_date")
+                parts = []
+                if pn:
+                    parts.append(pn)
+                elif br:
+                    parts.append(br)
+                if exp:
+                    parts.append(f"Expires {exp}")
+                summary = ". ".join(parts) if parts else None
+            if not scanned_at:
+                scanned_at = s.created_at.isoformat() + "Z" if getattr(s, 'created_at', None) else None
+        except Exception:
+            summary = None
+            scanned_at = None
+
+        result.append({
             "id": s.id,
-            "summary": s.extracted_json.get("summary"),
+            "summary": summary,
             "confidence": s.confidence,
-            "scannedAt": s.extracted_json.get("scannedAt"),
-        }
-        for s in scans
-    ]
+            "scannedAt": scanned_at,
+            "image": img,
+        })
+    return result
 
 # History detail
 @app.get("/history/{scan_id}")
@@ -217,9 +267,28 @@ def history_detail(scan_id: str, db: Session = Depends(get_db)):
     image_paths = []
     if scan.image_paths:
         try:
-            image_paths = json.loads(scan.image_paths)
-        except:
+            raw_paths = json.loads(scan.image_paths)
+            # normalize to public URLs
+            for p in raw_paths:
+                if not p:
+                    continue
+                if isinstance(p, str) and p.startswith('/uploads/'):
+                    image_paths.append(p)
+                else:
+                    p2 = str(p).replace('\\', '/')
+                    image_paths.append(f"/uploads/{os.path.basename(p2)}")
+        except Exception:
             image_paths = []
+    
+    # scannedAt fallback for older records
+    scanned_at = None
+    try:
+        extracted = scan.extracted_json or {}
+        scanned_at = extracted.get("scannedAt")
+        if not scanned_at:
+            scanned_at = scan.created_at.isoformat() + "Z" if getattr(scan, 'created_at', None) else None
+    except Exception:
+        scanned_at = None
     
     return {
         "id": scan.id,
@@ -229,7 +298,7 @@ def history_detail(scan_id: str, db: Session = Depends(get_db)):
         "extracted": scan.extracted_json,
         "confidence": scan.confidence,
         "imagePaths": image_paths,
-        "scannedAt": scan.extracted_json.get("scannedAt"),
+        "scannedAt": scanned_at,
     }
 
 # Run with: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
