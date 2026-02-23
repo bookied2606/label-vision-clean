@@ -2,15 +2,22 @@ const API_BASE = process.env.EXPO_PUBLIC_API_BASE || 'http://192.168.1.2:8000';
 
 // Test connectivity
 export const testConnection = async () => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 5000);
+
   try {
     const response = await fetch(`${API_BASE}/health`, {
       method: 'GET',
-      timeout: 5000,
+      signal: controller.signal,
     });
+
+    clearTimeout(timeoutId);
+
     const data = await response.json();
     console.log('Connection test:', data);
     return data;
   } catch (error) {
+    clearTimeout(timeoutId);
     console.error('Connection test failed:', error);
     throw error;
   }
@@ -46,10 +53,20 @@ export const scanImage = async (imageUri) => {
         if (timeoutId) clearTimeout(timeoutId);
         if (xhr.status >= 200 && xhr.status < 300) {
           try {
+            console.log('📥 RAW RESPONSE TEXT (first 500 chars):', xhr.responseText.substring(0, 500));
             const result = JSON.parse(xhr.responseText);
-            console.log('✅ Scan result:', result);
+            console.log('✅ PARSED RESULT - Full object:', JSON.stringify(result, null, 2));
+            console.log('✅ Product Name:', result.product_name);
+            console.log('✅ Ingredients count:', result.ingredients?.length || 0);
+            console.log('✅ Ingredients:', result.ingredients);
+            console.log('✅ Brand:', result.brand);
+            console.log('✅ Expiry:', result.expiry_date);
+            console.log('✅ Warnings:', result.warnings);
+            console.log('✅ Confidence:', result.confidence);
             resolve(result);
           } catch (e) {
+            console.error('❌ JSON parse failed:', e);
+            console.error('❌ Response text was:', xhr.responseText);
             reject(new Error('Failed to parse response'));
           }
         } else {
@@ -60,28 +77,89 @@ export const scanImage = async (imageUri) => {
       xhr.onerror = () => {
         if (timeoutId) clearTimeout(timeoutId);
         console.error('❌ XHR error');
+
+        // #region agent log
+        fetch('http://127.0.0.1:7652/ingest/35fa7aab-4023-4fce-8f61-7456c326f435', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Debug-Session-Id': '8d7e8e',
+          },
+          body: JSON.stringify({
+            sessionId: '8d7e8e',
+            runId: 'pre-fix',
+            hypothesisId: 'H1',
+            location: 'api.js:scanImage:xhr.onerror',
+            message: 'scanImage XHR error',
+            data: {},
+            timestamp: Date.now(),
+          }),
+        }).catch(() => {});
+        // #endregion
+
         reject(new Error('Network request failed'));
       };
       
       xhr.ontimeout = () => {
         if (timeoutId) clearTimeout(timeoutId);
         console.error('❌ XHR timeout');
+
+        // #region agent log
+        fetch('http://127.0.0.1:7652/ingest/35fa7aab-4023-4fce-8f61-7456c326f435', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Debug-Session-Id': '8d7e8e',
+          },
+          body: JSON.stringify({
+            sessionId: '8d7e8e',
+            runId: 'pre-fix',
+            hypothesisId: 'H1',
+            location: 'api.js:scanImage:xhr.ontimeout',
+            message: 'scanImage XHR timeout',
+            data: { timeout: xhr.timeout },
+            timestamp: Date.now(),
+          }),
+        }).catch(() => {});
+        // #endregion
+
         reject(new Error('Request timeout'));
       };
 
       const endpoint = isMultiple ? '/scanMultiple' : '/scan';
       const uploadUrl = `${API_BASE}${endpoint}`;
       console.log('📤 Uploading to:', uploadUrl);
-      
+
+      // #region agent log
+      fetch('http://127.0.0.1:7652/ingest/35fa7aab-4023-4fce-8f61-7456c326f435', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Debug-Session-Id': '8d7e8e',
+        },
+        body: JSON.stringify({
+          sessionId: '8d7e8e',
+          runId: 'pre-fix',
+          hypothesisId: 'H1',
+          location: 'api.js:scanImage:start',
+          message: 'scanImage start',
+          data: { uploadUrl, imageCount: imageUris.length, isMultiple },
+          timestamp: Date.now(),
+        }),
+      }).catch(() => {});
+      // #endregion
+
       xhr.open('POST', uploadUrl, true);
       // IMPORTANT: OCR + Gemini extraction takes 3-4 minutes with variable network
       // Using 20 minute timeout to handle slow networks without zombie connections
       xhr.timeout = 1200000;
       
       // Create FormData with file(s)
+      // IMPORTANT: /scan expects 'file' (singular), /scanMultiple expects 'files' (plural)
       const formData = new FormData();
+      const fieldName = isMultiple ? 'files' : 'file';  // Correct key for endpoint
       imageUris.forEach((uri, index) => {
-        formData.append('files' + (isMultiple ? '' : ''), {
+        formData.append(fieldName, {
           uri: uri,
           type: 'image/jpeg',
           name: `label_scan_${index + 1}.jpg`,
